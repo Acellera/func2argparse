@@ -1,0 +1,41 @@
+[project]
+name = "acellera-func2argparse"
+description = "Convert python functions to argparse objects"
+authors = [
+  { name = "Acellera", email = "info@acellera.com" },
+]
+readme = "README.md"
+requires-python = ">=3.9"
+dynamic = ["version"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = []
+
+[project.urls]
+"Homepage" = "https://github.com/Acellera/func2argparse"
+"Bug Tracker" = "https://github.com/Acellera/func2argparse/issues"
+
+[tool.setuptools.packages.find]
+where = [""]
+include = ["func2argparse*"]  
+namespaces = false
+
+[tool.versioneer]
+VCS = "git"
+style = "pep440"
+versionfile_source = "func2argparse/_version.py"
+versionfile_build = "func2argparse/_version.py"
+tag_prefix = ""
+parentdir_prefix = "func2argparse-"
+
+[tool.pytest.ini_options]
+python_files = "*.py"
+python_classes = "_Test"
+python_functions = "_test*"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools", "toml", "versioneer[toml]==0.28"]
+build-backend = "setuptools.build_meta"
