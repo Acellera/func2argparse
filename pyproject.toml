@@ -1,5 +1,5 @@
 [project]
-name = "acellera-func2argparse"
+name = "func2argparse"
 description = "Convert python functions to argparse objects"
 authors = [
   { name = "Acellera", email = "info@acellera.com" },
