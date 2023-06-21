@@ -231,10 +231,13 @@ def str_to_bool(value):
     raise RuntimeError(f"Invalid boolean value {value}")
 
 
-def get_manifest(file, parser, pm_mode=True):
+def get_manifest(file, parser, pm_mode=True, cwl=False):
     from collections import OrderedDict
     import json
     import os
+
+    if cwl:
+        return get_manifest_cwl(file, parser)
 
     manifest = OrderedDict()
     manifestf = os.path.join(os.path.dirname(file), "manifest.json")
@@ -272,13 +275,83 @@ def get_manifest(file, parser, pm_mode=True):
     # TODO: Deprecate these
     if pm_mode:
         if "specs" not in manifest:
-            manifest["specs"] = '{"app": "play0GPU"}'
+            if "resources" in manifest and manifest["resources"]["ngpu"] > 0:
+                manifest["specs"] = '{"app": "play1GPU"}'
+            else:
+                manifest["specs"] = '{"app": "play0GPU"}'
         if "api_version" not in manifest:
             manifest["api_version"] = "v1"
         if "container" not in manifest:
             manifest["container"] = f"{manifest['name']}_v{manifest['version']}"
         if "periodicity" not in manifest:
             manifest["periodicity"] = 0
+
+    return manifest
+
+
+def get_manifest_cwl(file, parser):
+    import json
+    import yaml
+    import os
+
+    map_argtypes = {
+        "str": "string",
+        "bool": "boolean",
+        "float": "float",
+        "int": "int",
+        "Path": "File",
+    }
+
+    manifest = {"label": parser.prog, "doc": parser.description}
+    manifest.update({"cwlVersion": "v1.2", "class": "CommandLineTool", "inputs": {}})
+
+    manifestf = os.path.join(os.path.dirname(file), "manifest.cwl")
+    if os.path.exists(manifestf):
+        with open(manifestf, "r") as f:
+            manifest.update(yaml.load(f, Loader=yaml.FullLoader))
+    else:
+        manifestf = os.path.join(os.path.dirname(file), "manifest.json")
+        if os.path.exists(manifestf):
+            with open(manifestf, "r") as f:
+                manifest.update(json.load(f))
+
+    parseractions = parser._actions
+    for i, action in enumerate(parseractions):
+        # skip the hidden arguments, the excluded args and the help argument
+        if action.help == "==SUPPRESS==" or action.dest in ("help",):
+            continue
+
+        argtype = action.type.__name__ if action.type is not None else "bool"
+        argtype = map_argtypes[argtype]
+
+        if action.choices is not None:
+            enum_name = f"{action.dest.replace('-', '_')}_enum"
+            if "requirements" not in manifest:
+                manifest["requirements"] = {}
+            if "SchemaDefRequirement" not in manifest["requirements"]:
+                manifest["requirements"]["SchemaDefRequirement"] = {}
+            if "types" not in manifest["requirements"]["SchemaDefRequirement"]:
+                manifest["requirements"]["SchemaDefRequirement"]["types"] = []
+            manifest["requirements"]["SchemaDefRequirement"]["types"].append(
+                {"type": "enum", "name": enum_name, "symbols": action.choices}
+            )
+            argtype = enum_name
+
+        if action.nargs:
+            argtype += "[]"
+        if not action.required:
+            argtype += "?"
+
+        manifest["inputs"][action.dest] = {
+            "type": argtype,
+            "doc": action.help,
+            "inputBinding": {
+                "position": i,
+                "prefix": action.option_strings[0],
+            },
+        }
+        if action.default is not None:
+            manifest["inputs"][action.dest]["default"] = action.default
 
     return manifest
 
