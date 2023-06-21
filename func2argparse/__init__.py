@@ -275,7 +275,11 @@ def get_manifest(file, parser, pm_mode=True, cwl=False):
     # TODO: Deprecate these
     if pm_mode:
         if "specs" not in manifest:
-            if "resources" in manifest and manifest["resources"]["ngpu"] > 0:
+            if (
+                "resources" in manifest
+                and "ngpu" in manifest["resources"]
+                and manifest["resources"]["ngpu"] > 0
+            ):
                 manifest["specs"] = '{"app": "play1GPU"}'
             else:
                 manifest["specs"] = '{"app": "play0GPU"}'
