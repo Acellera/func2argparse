@@ -55,6 +55,8 @@ def _parse_docs(doc):
 
     reg1 = re.compile(r"^(\S+)\s*:")
     reg2 = re.compile(r"choices=([\(\[].*[\)\]])")
+    reg3 = re.compile(r"gui_options=(.*)")
+    reg4 = re.compile(r"nargs=(\d+)")
 
     lines = doc.splitlines()
     name = lines[0].strip().split()[0]
@@ -79,6 +81,12 @@ def _parse_docs(doc):
                 choices = reg2.findall(line)
                 if len(choices):
                     argdocs[currvar]["choices"] = literal_eval(choices[0])
+                gui_options = reg3.findall(line)
+                if len(gui_options):
+                    argdocs[currvar]["gui_options"] = literal_eval(gui_options[0])
+                nargs = reg4.findall(line)
+                if len(nargs):
+                    argdocs[currvar]["nargs"] = int(nargs[0])
             elif currvar is not None:
                 # Everything after the initial variable line counts as help
                 argdocs[currvar]["doc"] += line + " "
@@ -90,7 +98,7 @@ def _parse_docs(doc):
     return argdocs, description, name
 
 
-def _get_name_abbreviations(sig):
+def _get_name_abbreviations(argnames):
     abbrevs = {"help": "h"}
 
     def get_abbr(name):
@@ -102,7 +110,7 @@ def _get_name_abbreviations(sig):
         for i in range(1, len(name) + 1):
             yield name[:i]
 
-    for argname in sig.parameters:
+    for argname in argnames:
         if argname[0] == "_":
             continue  # Don't add underscore arguments to argparser
         for abb in get_abbr(argname):
@@ -112,6 +120,187 @@ def _get_name_abbreviations(sig):
     return abbrevs
 
 
+def func_to_manifest(func, file=None, pm_mode=True):
+    from collections import OrderedDict
+    import json
+    import yaml
+    import os
+    import inspect
+    from typing import get_origin, get_args
+
+    # Read existing manifest if it exists
+    manifest = OrderedDict()
+
+    if file is not None:
+        manifestf = os.path.join(os.path.dirname(file), "manifest.json")
+        if os.path.exists(manifestf):
+            with open(manifestf, "r") as f:
+                manifest = json.load(f)
+        manifestf = os.path.join(os.path.dirname(file), "manifest.yaml")
+        if os.path.exists(manifestf):
+            with open(manifestf, "r") as f:
+                manifest = yaml.load(f, Loader=yaml.FullLoader)
+
+    # Get function signature and documentation
+    sig = inspect.signature(func)
+    doc = func.__doc__
+    if doc is None:
+        raise RuntimeError("Could not find documentation in the function...")
+
+    argdocs, description, name = _parse_docs(doc)
+
+    if "name" not in manifest:
+        manifest["name"] = name
+    if "version" not in manifest:
+        manifest["version"] = "1"
+    manifest["description"] = description
+
+    arguments = []
+    for argname in sig.parameters:
+        if argname[0] == "_" or argname in ("args", "kwargs"):
+            continue  # Don't add underscore arguments to argparser or args, kwargs
+        params = sig.parameters[argname]
+
+        if argname not in argdocs:
+            raise RuntimeError(
+                f"Could not find help for argument {argname} in the docstring of the function. Please document it."
+            )
+
+        argtype = params.annotation
+        nargs = None
+        # This is needed for compound types like: list[str]
+        if get_origin(params.annotation) is not None:
+            origtype = get_origin(params.annotation)
+            argtype = get_args(params.annotation)[0]
+            if origtype in (list, tuple):
+                nargs = "+"
+
+        # Override the nargs if specified in the docstring
+        if "nargs" in argdocs[argname]:
+            nargs = argdocs[argname]["nargs"]
+
+        default = None
+        if params.default != inspect._empty:
+            default = params.default
+            # Don't allow empty list defaults., convert to None
+            if type(default) in (list, tuple) and len(default) == 0:
+                raise RuntimeError(
+                    f"Please don't use empty tuples/lists as default arguments (e.g. {argname}=()). Use =None instead"
+                )
+
+        if type(argtype) == tuple:
+            raise RuntimeError(
+                f"Failed to get type annotation for argument '{argname}'"
+            )
+
+        if argtype == bool and default:
+            raise RuntimeError(
+                "func2argparse does not allow boolean flags with default value True"
+            )
+
+        argument = OrderedDict()
+        argument["mandatory"] = params.default == inspect._empty
+        argument["description"] = argdocs[argname]["doc"].strip()
+        argument["type"] = argtype.__name__
+        argument["name"] = argname
+        argument["tag"] = f"--{argname.replace('_', '-')}"
+        argument["value"] = default
+        argument["nargs"] = nargs
+        argument["choices"] = argdocs[argname]["choices"]
+        if "gui_options" in argdocs[argname]:
+            argument["gui_options"] = argdocs[argname]["gui_options"]
+        arguments.append(argument)
+
+    manifest["params"] = arguments
+
+    # TODO: Deprecate these
+    if pm_mode:
+        if "specs" not in manifest:
+            if (
+                "resources" in manifest
+                and "ngpu" in manifest["resources"]
+                and manifest["resources"]["ngpu"] > 0
+            ):
+                manifest["specs"] = '{"app": "play1GPU"}'
+            else:
+                manifest["specs"] = '{"app": "play0GPU"}'
+        if "api_version" not in manifest:
+            manifest["api_version"] = "v1"
+        if "container" not in manifest:
+            manifest["container"] = f"{manifest['name']}_v{manifest['version']}"
+        if "periodicity" not in manifest:
+            manifest["periodicity"] = 0
+
+    return manifest
+
+
+def manifest_to_argparser(
+    manifest, exit_on_error=True, allow_conf_yaml=False, unmatched_args="error"
+):
+    from pathlib import Path
+
+    try:
+        parser = argparse.ArgumentParser(
+            manifest["name"],
+            description=manifest["description"],
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            exit_on_error=exit_on_error,
+        )
+    except Exception:
+        parser = argparse.ArgumentParser(
+            manifest["name"],
+            description=manifest["description"],
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+    if allow_conf_yaml:
+        parser.add_argument(
+            "--conf",
+            help="Configuration YAML file to set all parameters",
+            type=open,
+            action=lambda *x, **y: LoadFromFile(*x, **y, unmatched_args=unmatched_args),
+        )
+
+    # Calculate abbreviations
+    abbrevs = _get_name_abbreviations([x["name"] for x in manifest["params"]])
+
+    type_map = {"Path": Path, "bool": bool, "int": int, "float": float, "str": str}
+
+    for param in manifest["params"]:
+        argname = param["name"]
+        if param["type"] == "bool":
+            if param["nargs"] is None:
+                parser.add_argument(
+                    f"--{argname.replace('_', '-')}",
+                    f"-{abbrevs[argname]}",
+                    help=param["description"],
+                    action="store_true",
+                )
+            else:
+                parser.add_argument(
+                    f"--{argname.replace('_', '-')}",
+                    f"-{abbrevs[argname]}",
+                    help=param["description"],
+                    default=param["value"],
+                    type=str_to_bool,
+                    required=param["mandatory"],
+                    nargs=param["nargs"],
+                )
+        else:
+            parser.add_argument(
+                f"--{argname.replace('_', '-')}",
+                f"-{abbrevs[argname]}",
+                help=param["description"],
+                default=param["value"],
+                type=type_map[param["type"]],
+                choices=param["choices"],
+                required=param["mandatory"],
+                nargs=param["nargs"],
+            )
+
+    return parser
+
+
+# DEPRECATED
 def func_to_argparser(
     func, exit_on_error=True, allow_conf_yaml=False, unmatched_args="error"
 ):
@@ -147,7 +336,7 @@ def func_to_argparser(
         )
 
     # Calculate abbreviations
-    abbrevs = _get_name_abbreviations(sig)
+    abbrevs = _get_name_abbreviations(sig.parameters)
 
     for argname in sig.parameters:
         if argname[0] == "_" or argname in ("args", "kwargs"):
