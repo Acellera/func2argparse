@@ -1,4 +1,5 @@
 import argparse
+from collections import OrderedDict
 from func2argparse import _version
 
 __version__ = _version.get_versions()["version"]
@@ -69,7 +70,7 @@ def _parse_docs(doc):
             description.append(line.strip())
     description = " ".join(description)
 
-    argdocs = {}
+    argdocs = OrderedDict()
     currvar = None
     paramsection = False
     for i in range(len(lines)):
@@ -121,7 +122,6 @@ def _get_name_abbreviations(argnames):
 
 
 def func_to_manifest(func, file=None, pm_mode=True):
-    from collections import OrderedDict
     import json
     import yaml
     import os
@@ -155,16 +155,33 @@ def func_to_manifest(func, file=None, pm_mode=True):
         manifest["version"] = "1"
     manifest["description"] = description
 
-    arguments = []
-    for argname in sig.parameters:
-        if argname[0] == "_" or argname in ("args", "kwargs"):
-            continue  # Don't add underscore arguments to argparser or args, kwargs
-        params = sig.parameters[argname]
+    # Don't add underscore arguments to argparser or args, kwargs
+    sigargs = []
+    for argn in sig.parameters:
+        if not (argn.startswith("_") or argn in ("args", "kwargs")):
+            sigargs.append(argn)
 
-        if argname not in argdocs:
+    for argn in sigargs:
+        if argn not in argdocs:
             raise RuntimeError(
-                f"Could not find help for argument {argname} in the docstring of the function. Please document it."
+                f"Could not find help for argument {argn} in the docstring of the function. Please document it."
             )
+
+    for argn in argdocs:
+        if argn not in sigargs:
+            raise RuntimeError(
+                f"Found docs for argument {argn} in the docstring which is not in the function signature. Please remove it."
+            )
+
+    for argn1, argn2 in zip(sigargs, argdocs):
+        if argn1 != argn2:
+            raise RuntimeError(
+                f"Argument order mismatch between function signature and documentation (need to have same order). {argn1} != {argn2}"
+            )
+
+    arguments = []
+    for argname in sigargs:
+        params = sig.parameters[argname]
 
         argtype = params.annotation
         nargs = None
@@ -263,7 +280,14 @@ def manifest_to_argparser(
     # Calculate abbreviations
     abbrevs = _get_name_abbreviations([x["name"] for x in manifest["params"]])
 
-    type_map = {"Path": Path, "bool": bool, "int": int, "float": float, "str": str}
+    type_map = {
+        "Path": Path,
+        "bool": bool,
+        "int": int,
+        "float": float,
+        "str": str,
+        "dict": dict,
+    }
 
     for param in manifest["params"]:
         argname = param["name"]
@@ -286,12 +310,20 @@ def manifest_to_argparser(
                     nargs=param["nargs"],
                 )
         else:
+            if param["type"] in type_map:
+                param_type = type_map[param["type"]]
+            else:
+                print(
+                    f"Warning: Argument {argname} of type {param['type']} could not be mapped to a Python base type and thus will not be type-checked."
+                )
+                param_type = None
+
             parser.add_argument(
                 f"--{argname.replace('_', '-')}",
                 f"-{abbrevs[argname]}",
                 help=param["description"],
                 default=param["value"],
-                type=type_map[param["type"]],
+                type=param_type,
                 choices=param["choices"],
                 required=param["mandatory"],
                 nargs=param["nargs"],
@@ -421,7 +453,6 @@ def str_to_bool(value):
 
 
 def get_manifest(file, parser, pm_mode=True, cwl=False):
-    from collections import OrderedDict
     import json
     import os
 
