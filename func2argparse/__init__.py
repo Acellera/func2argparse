@@ -123,7 +123,6 @@ def _get_name_abbreviations(argnames):
 
 def func_to_manifest(func, file=None, pm_mode=True):
     import json
-    import yaml
     import os
     import inspect
     from typing import get_origin, get_args
@@ -138,6 +137,8 @@ def func_to_manifest(func, file=None, pm_mode=True):
                 manifest = json.load(f)
         manifestf = os.path.join(os.path.dirname(file), "manifest.yaml")
         if os.path.exists(manifestf):
+            import yaml
+
             with open(manifestf, "r") as f:
                 manifest = yaml.load(f, Loader=yaml.FullLoader)
 
