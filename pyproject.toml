@@ -1,15 +1,13 @@
 [project]
 name = "func2argparse"
 description = "Convert python functions to argparse objects"
-authors = [
-  { name = "Acellera", email = "info@acellera.com" },
-]
+authors = [{ name = "Acellera", email = "info@acellera.com" }]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.8"
 dynamic = ["version"]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
 ]
 dependencies = []
 
@@ -19,7 +17,7 @@ dependencies = []
 
 [tool.setuptools.packages.find]
 where = [""]
-include = ["func2argparse*"]  
+include = ["func2argparse*"]
 namespaces = false
 
 [tool.versioneer]
