@@ -121,26 +121,9 @@ def _get_name_abbreviations(argnames):
     return abbrevs
 
 
-def func_to_manifest(func, file=None, pm_mode=True):
-    import json
-    import os
-    import inspect
+def _parse_function(func):
     from typing import get_origin, get_args
-
-    # Read existing manifest if it exists
-    manifest = OrderedDict()
-
-    if file is not None:
-        manifestf = os.path.join(os.path.dirname(file), "manifest.json")
-        if os.path.exists(manifestf):
-            with open(manifestf, "r") as f:
-                manifest = json.load(f)
-        manifestf = os.path.join(os.path.dirname(file), "manifest.yaml")
-        if os.path.exists(manifestf):
-            import yaml
-
-            with open(manifestf, "r") as f:
-                manifest = yaml.load(f, Loader=yaml.FullLoader)
+    import inspect
 
     # Get function signature and documentation
     sig = inspect.signature(func)
@@ -149,12 +132,6 @@ def func_to_manifest(func, file=None, pm_mode=True):
         raise RuntimeError("Could not find documentation in the function...")
 
     argdocs, description, name = _parse_docs(doc)
-
-    if "name" not in manifest:
-        manifest["name"] = name
-    if "version" not in manifest:
-        manifest["version"] = "1"
-    manifest["description"] = description
 
     # Don't add underscore arguments to argparser or args, kwargs
     sigargs = []
@@ -228,8 +205,59 @@ def func_to_manifest(func, file=None, pm_mode=True):
         if "gui_options" in argdocs[argname]:
             argument["gui_options"] = argdocs[argname]["gui_options"]
         arguments.append(argument)
+    return name, description, arguments
 
-    manifest["params"] = arguments
+
+def func_to_manifest(functions, file=None, pm_mode=True):
+    import json
+    import os
+
+    if not isinstance(functions, list):
+        functions = [functions]
+
+    # Read existing manifest if it exists
+    manifest = OrderedDict()
+
+    if file is not None:
+        manifestf = os.path.join(os.path.dirname(file), "manifest.json")
+        if os.path.exists(manifestf):
+            with open(manifestf, "r") as f:
+                manifest = json.load(f)
+        manifestf = os.path.join(os.path.dirname(file), "manifest.yaml")
+        if os.path.exists(manifestf):
+            import yaml
+
+            with open(manifestf, "r") as f:
+                manifest = yaml.load(f, Loader=yaml.FullLoader)
+
+    for func in functions:
+        name, description, arguments = _parse_function(func)
+        if "functions" in manifest:
+            # Find the where in the list the function is stored
+            name = func.__name__
+            try:
+                idx = [
+                    ff["function"].endswith(f".{name}") for ff in manifest["functions"]
+                ].index(True)
+            except ValueError:
+                raise RuntimeError(
+                    f"Function {name} not found in manifest.json 'functions' section. Please add it."
+                )
+            manifest["functions"][idx]["description"] = description
+            manifest["functions"][idx]["params"] = arguments
+            manifest["functions"][idx]["name"] = name
+        else:  # TODO: DEPRECATE this
+            if len(functions) > 1:
+                raise RuntimeError(
+                    "Multiple functions are not supported in the old manifest format. Please use the new manifest format."
+                )
+
+            if "name" not in manifest:
+                manifest["name"] = name
+            if "version" not in manifest:
+                manifest["version"] = "1"
+            manifest["description"] = description
+            manifest["params"] = arguments
 
     # TODO: Deprecate these
     if pm_mode:
@@ -245,31 +273,21 @@ def func_to_manifest(func, file=None, pm_mode=True):
         if "api_version" not in manifest:
             manifest["api_version"] = "v1"
         if "container" not in manifest:
-            manifest["container"] = f"{manifest['name']}_v{manifest['version']}"
+            if "name" in manifest["container_config"]:
+                manifest["container"] = (
+                    f"{manifest['container_config']['name']}_v{manifest['container_config']['version']}"
+                )
+            else:
+                manifest["container"] = f"{manifest['name']}_v{manifest['version']}"
         if "periodicity" not in manifest:
             manifest["periodicity"] = 0
 
     return manifest
 
 
-def manifest_to_argparser(
-    manifest, exit_on_error=True, allow_conf_yaml=False, unmatched_args="error"
-):
+def _add_params_to_parser(parser, params, allow_conf_yaml, unmatched_args):
     from pathlib import Path
 
-    try:
-        parser = argparse.ArgumentParser(
-            manifest["name"],
-            description=manifest["description"],
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-            exit_on_error=exit_on_error,
-        )
-    except Exception:
-        parser = argparse.ArgumentParser(
-            manifest["name"],
-            description=manifest["description"],
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        )
     if allow_conf_yaml:
         parser.add_argument(
             "--conf",
@@ -279,7 +297,7 @@ def manifest_to_argparser(
         )
 
     # Calculate abbreviations
-    abbrevs = _get_name_abbreviations([x["name"] for x in manifest["params"]])
+    abbrevs = _get_name_abbreviations([x["name"] for x in params])
 
     type_map = {
         "Path": Path,
@@ -290,7 +308,7 @@ def manifest_to_argparser(
         "dict": dict,
     }
 
-    for param in manifest["params"]:
+    for param in params:
         argname = param["name"]
         if param["type"] == "bool":
             if param["nargs"] is None:
@@ -329,6 +347,51 @@ def manifest_to_argparser(
                 required=param["mandatory"],
                 nargs=param["nargs"],
             )
+
+
+def manifest_to_argparser(
+    manifest, exit_on_error=True, allow_conf_yaml=False, unmatched_args="error"
+):
+    # If it's a single function treat it like the old code
+    if "functions" in manifest and len(manifest["functions"]) == 1:
+        manifest = manifest["functions"][0]
+
+    if "functions" in manifest:
+        try:
+            parser = argparse.ArgumentParser(
+                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                exit_on_error=exit_on_error,
+            )
+        except Exception:
+            parser = argparse.ArgumentParser(
+                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            )
+
+        subparsers = parser.add_subparsers(help="sub-command help")
+        for ff in manifest["functions"]:
+            subp = subparsers.add_parser(
+                ff["name"],
+                description=ff["description"],
+                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            )
+            _add_params_to_parser(subp, ff["params"], allow_conf_yaml, unmatched_args)
+    else:
+        try:
+            parser = argparse.ArgumentParser(
+                manifest["name"],
+                description=manifest["description"],
+                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                exit_on_error=exit_on_error,
+            )
+        except Exception:
+            parser = argparse.ArgumentParser(
+                manifest["name"],
+                description=manifest["description"],
+                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            )
+        _add_params_to_parser(
+            parser, manifest["params"], allow_conf_yaml, unmatched_args
+        )
 
     return parser
 
