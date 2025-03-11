@@ -1,8 +1,11 @@
 import argparse
 from collections import OrderedDict
-from func2argparse import _version
+from importlib.metadata import version, PackageNotFoundError
 
-__version__ = _version.get_versions()["version"]
+try:
+    __version__ = version("func2argparse")
+except PackageNotFoundError:
+    pass
 
 
 class LoadFromFile(argparse.Action):
@@ -124,6 +127,7 @@ def _get_name_abbreviations(argnames):
 def _parse_function(func):
     from typing import get_origin, get_args
     import inspect
+    import types
 
     # Get function signature and documentation
     sig = inspect.signature(func)
@@ -162,11 +166,18 @@ def _parse_function(func):
         params = sig.parameters[argname]
 
         argtype = params.annotation
+        if isinstance(argtype, types.UnionType) and len(get_args(argtype)) == 2:
+            # Handle the "x | None" cases
+            if get_args(argtype)[0] is type(None):
+                argtype = get_args(argtype)[1]
+            elif get_args(argtype)[1] is type(None):
+                argtype = get_args(argtype)[0]
+
         nargs = None
         # This is needed for compound types like: list[str]
-        if get_origin(params.annotation) is not None:
-            origtype = get_origin(params.annotation)
-            argtype = get_args(params.annotation)[0]
+        if get_origin(argtype) is not None:
+            origtype = get_origin(argtype)
+            argtype = get_args(argtype)[0]
             if origtype in (list, tuple):
                 nargs = "+"
 
@@ -259,29 +270,6 @@ def func_to_manifest(functions, file=None, pm_mode=True):
             manifest["description"] = description
             manifest["params"] = arguments
 
-    # TODO: Deprecate these
-    if pm_mode:
-        if "specs" not in manifest:
-            if (
-                "resources" in manifest
-                and "ngpu" in manifest["resources"]
-                and manifest["resources"]["ngpu"] > 0
-            ):
-                manifest["specs"] = '{"app": "play1GPU"}'
-            else:
-                manifest["specs"] = '{"app": "play0GPU"}'
-        if "api_version" not in manifest:
-            manifest["api_version"] = "v1"
-        if "container" not in manifest:
-            if "name" in manifest["container_config"]:
-                manifest["container"] = (
-                    f"{manifest['container_config']['name']}_v{manifest['container_config']['version']}"
-                )
-            else:
-                manifest["container"] = f"{manifest['name']}_v{manifest['version']}"
-        if "periodicity" not in manifest:
-            manifest["periodicity"] = 0
-
     return manifest
 
 
@@ -307,7 +295,6 @@ def _add_params_to_parser(parser, params, allow_conf_yaml, unmatched_args):
         "str": str,
         "dict": dict,
     }
-
     for param in params:
         argname = param["name"]
         if param["type"] == "bool":
@@ -555,24 +542,6 @@ def get_manifest(file, parser, pm_mode=True, cwl=False):
         manifest["version"] = "1"
     manifest["description"] = parser.description
     manifest["params"] = parserargs
-
-    # TODO: Deprecate these
-    if pm_mode:
-        if "specs" not in manifest:
-            if (
-                "resources" in manifest
-                and "ngpu" in manifest["resources"]
-                and manifest["resources"]["ngpu"] > 0
-            ):
-                manifest["specs"] = '{"app": "play1GPU"}'
-            else:
-                manifest["specs"] = '{"app": "play0GPU"}'
-        if "api_version" not in manifest:
-            manifest["api_version"] = "v1"
-        if "container" not in manifest:
-            manifest["container"] = f"{manifest['name']}_v{manifest['version']}"
-        if "periodicity" not in manifest:
-            manifest["periodicity"] = 0
 
     return manifest
 
