@@ -63,7 +63,10 @@ def _parse_docs(doc):
     reg4 = re.compile(r"nargs=(\d+)")
 
     lines = doc.splitlines()
-    name = lines[0].strip().split()[0]
+    try:
+        name = lines[0].strip().split()[0]
+    except Exception:
+        name = None
 
     description = []
     for line in lines[1:]:
@@ -199,11 +202,6 @@ def _parse_function(func):
                 f"Failed to get type annotation for argument '{argname}'"
             )
 
-        if argtype == bool and default:
-            raise RuntimeError(
-                "func2argparse does not allow boolean flags with default value True"
-            )
-
         argument = OrderedDict()
         argument["mandatory"] = params.default == inspect._empty
         argument["description"] = argdocs[argname]["doc"].strip()
@@ -299,12 +297,20 @@ def _add_params_to_parser(parser, params, allow_conf_yaml, unmatched_args):
         argname = param["name"]
         if param["type"] == "bool":
             if param["nargs"] is None:
-                parser.add_argument(
-                    f"--{argname.replace('_', '-')}",
-                    f"-{abbrevs[argname]}",
-                    help=param["description"],
-                    action="store_true",
-                )
+                if param["value"] is True:
+                    parser.add_argument(
+                        f"--{argname.replace('_', '-')}",
+                        help=param["description"],
+                        default=True,
+                        action=argparse.BooleanOptionalAction,
+                    )
+                else:
+                    parser.add_argument(
+                        f"--{argname.replace('_', '-')}",
+                        f"-{abbrevs[argname]}",
+                        help=param["description"],
+                        action="store_true",
+                    )
             else:
                 parser.add_argument(
                     f"--{argname.replace('_', '-')}",
@@ -379,116 +385,6 @@ def manifest_to_argparser(
         _add_params_to_parser(
             parser, manifest["params"], allow_conf_yaml, unmatched_args
         )
-
-    return parser
-
-
-# DEPRECATED
-def func_to_argparser(
-    func, exit_on_error=True, allow_conf_yaml=False, unmatched_args="error"
-):
-    import inspect
-    from typing import get_origin, get_args
-
-    sig = inspect.signature(func)
-    doc = func.__doc__
-    if doc is None:
-        raise RuntimeError("Could not find documentation in the function...")
-
-    argdocs, description, name = _parse_docs(doc)
-
-    try:
-        parser = argparse.ArgumentParser(
-            name,
-            description=description,
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-            exit_on_error=exit_on_error,
-        )
-    except Exception:
-        parser = argparse.ArgumentParser(
-            name,
-            description=description,
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        )
-    if allow_conf_yaml:
-        parser.add_argument(
-            "--conf",
-            help="Configuration YAML file to set all parameters",
-            type=open,
-            action=lambda *x, **y: LoadFromFile(*x, **y, unmatched_args=unmatched_args),
-        )
-
-    # Calculate abbreviations
-    abbrevs = _get_name_abbreviations(sig.parameters)
-
-    for argname in sig.parameters:
-        if argname[0] == "_" or argname in ("args", "kwargs"):
-            continue  # Don't add underscore arguments to argparser or args, kwargs
-        params = sig.parameters[argname]
-
-        if argname not in argdocs:
-            raise RuntimeError(
-                f"Could not find help for argument {argname} in the docstring of the function. Please document it."
-            )
-
-        argtype = params.annotation
-        nargs = None
-        # This is needed for compound types like: list[str]
-        if get_origin(params.annotation) is not None:
-            origtype = get_origin(params.annotation)
-            argtype = get_args(params.annotation)[0]
-            if origtype in (list, tuple):
-                nargs = "+"
-
-        default = None
-        if params.default != inspect._empty:
-            default = params.default
-            # Don't allow empty list defaults., convert to None
-            if type(default) in (list, tuple) and len(default) == 0:
-                raise RuntimeError(
-                    f"Please don't use empty tuples/lists as default arguments (e.g. {argname}=()). Use =None instead"
-                )
-
-        if type(argtype) == tuple:
-            raise RuntimeError(
-                f"Failed to get type annotation for argument '{argname}'"
-            )
-
-        if argtype == bool:
-            if nargs is None:
-                if default:
-                    raise RuntimeError(
-                        "func2argparse does not allow boolean flags with default value True"
-                    )
-                parser.add_argument(
-                    f"--{argname.replace('_', '-')}",
-                    f"-{abbrevs[argname]}",
-                    help=argdocs[argname]["doc"].strip(),
-                    action="store_true",
-                )
-            else:
-                parser.add_argument(
-                    f"--{argname.replace('_', '-')}",
-                    f"-{abbrevs[argname]}",
-                    help=argdocs[argname]["doc"].strip(),
-                    default=default,
-                    type=str_to_bool,
-                    required=params.default == inspect._empty,
-                    nargs=nargs,
-                )
-        else:
-            help = argdocs[argname]["doc"].strip()
-            choices = argdocs[argname]["choices"]
-            parser.add_argument(
-                f"--{argname.replace('_', '-')}",
-                f"-{abbrevs[argname]}",
-                help=help,
-                default=default,
-                type=argtype,
-                choices=choices,
-                required=params.default == inspect._empty,
-                nargs=nargs,
-            )
 
     return parser
 

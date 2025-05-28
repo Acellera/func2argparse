@@ -64,10 +64,11 @@ def _func(
 
 
 def _test_func2argparse():
-    from func2argparse import func_to_argparser
+    from func2argparse import func_to_manifest, manifest_to_argparser
     import argparse
 
-    parser = func_to_argparser(_func, exit_on_error=False)
+    manifest = func_to_manifest(_func)
+    parser = manifest_to_argparser(manifest, exit_on_error=False)
 
     test_args = {
         "x": 5,

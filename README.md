@@ -57,8 +57,10 @@ def foo(
     """
     print(locals())
 
-from func2argparse import func_to_argparser
-parser = func_to_argparser(foo, exit_on_error=False)
+from func2argparse import func_to_manifest, manifest_to_argparser
+
+manifest = func_to_manifest(foo)
+parser = manifest_to_argparser(manifest, exit_on_error=False)
 parser.print_help()
 ```
 
