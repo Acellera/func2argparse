@@ -183,6 +183,8 @@ def _parse_function(func):
             argtype = get_args(argtype)[0]
             if origtype in (list, tuple):
                 nargs = "+"
+            elif origtype == dict:
+                argtype = dict
 
         # Override the nargs if specified in the docstring
         if "nargs" in argdocs[argname]:
