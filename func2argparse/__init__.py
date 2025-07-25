@@ -69,7 +69,7 @@ def _parse_docs(doc):
         name = None
 
     description = []
-    for line in lines[1:]:
+    for line in lines:
         if line.strip().startswith("Parameters"):
             break
         if len(line.strip()):
