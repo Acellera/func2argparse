@@ -75,6 +75,8 @@ def _parse_docs(doc):
         if len(line.strip()):
             description.append(line.strip())
     description = " ".join(description)
+    if len(description) == 0:
+        description = lines[0].strip()
 
     argdocs = OrderedDict()
     currvar = None
