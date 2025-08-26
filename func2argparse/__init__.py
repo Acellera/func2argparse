@@ -129,10 +129,25 @@ def _get_name_abbreviations(argnames):
     return abbrevs
 
 
+# Backwards-compatible helper for older Python versions
+def is_union_type(tp) -> bool:
+    """Return True if tp is a typing.Union or X | Y style union."""
+    import sys
+    from typing import Union, get_origin
+
+    if sys.version_info >= (3, 10):
+        import types
+
+        # X | Y -> types.UnionType
+        if isinstance(tp, types.UnionType):
+            return True
+    # typing.Union[...] -> get_origin(tp) is typing.Union
+    return get_origin(tp) is Union
+
+
 def _parse_function(func):
     from typing import get_origin, get_args
     import inspect
-    import types
 
     # Get function signature and documentation
     sig = inspect.signature(func)
@@ -171,7 +186,7 @@ def _parse_function(func):
         params = sig.parameters[argname]
 
         argtype = params.annotation
-        if isinstance(argtype, types.UnionType) and len(get_args(argtype)) == 2:
+        if is_union_type(argtype) and len(get_args(argtype)) == 2:
             # Handle the "x | None" cases
             if get_args(argtype)[0] is type(None):
                 argtype = get_args(argtype)[1]
