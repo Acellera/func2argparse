@@ -237,6 +237,9 @@ def _parse_function(func):
                     f"Please don't use empty tuples/lists as default arguments (e.g. {argname}=()). Use =None instead"
                 )
 
+        if default is None and params.default is None:
+            nullable = True
+
         if type(argtype) == tuple:
             raise RuntimeError(
                 f"Failed to get type annotation for argument '{argname}'"

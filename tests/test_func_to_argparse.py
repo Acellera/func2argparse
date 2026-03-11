@@ -328,3 +328,45 @@ def _test_pipe_union_types_argparser():
     assert parsed_min["f"] is None
     assert parsed_min["g"] is None
     assert parsed_min["nums"] is None
+
+
+def _func_implicit_nullable(
+    a: str = None,
+    b: list[int] = None,
+    c: dict = None,
+    d: int = None,
+    e: str = "hello",
+    f: int = 5,
+):
+    """Test implicit nullable from default=None
+
+    Parameters
+    ----------
+    a : str
+        A string with None default
+    b : list[int]
+        A list with None default
+    c : dict
+        A dict with None default
+    d : int
+        An int with None default
+    e : str
+        A string with non-None default
+    f : int
+        An int with non-None default
+    """
+    pass
+
+
+def _test_implicit_nullable():
+    from func2argparse import func_to_manifest
+
+    manifest = func_to_manifest(_func_implicit_nullable)
+    params = {p["name"]: p for p in manifest["params"]}
+
+    assert params["a"]["nullable"] is True
+    assert params["b"]["nullable"] is True
+    assert params["c"]["nullable"] is True
+    assert params["d"]["nullable"] is True
+    assert params["e"]["nullable"] is False
+    assert params["f"]["nullable"] is False
