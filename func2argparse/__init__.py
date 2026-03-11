@@ -1,6 +1,9 @@
 import argparse
 from collections import OrderedDict
 from importlib.metadata import version, PackageNotFoundError
+from pathlib import Path
+
+SERIALIZABLE_TYPES = {str, int, float, bool, Path, dict, list, tuple}
 
 try:
     __version__ = version("func2argparse")
@@ -186,12 +189,30 @@ def _parse_function(func):
         params = sig.parameters[argname]
 
         argtype = params.annotation
-        if is_union_type(argtype) and len(get_args(argtype)) == 2:
-            # Handle the "x | None" cases
-            if get_args(argtype)[0] is type(None):
-                argtype = get_args(argtype)[1]
-            elif get_args(argtype)[1] is type(None):
-                argtype = get_args(argtype)[0]
+        nullable = False
+
+        if is_union_type(argtype):
+            union_args = get_args(argtype)
+            nullable = type(None) in union_args
+            filtered = []
+            for t in union_args:
+                if t is type(None):
+                    continue
+                origin = get_origin(t)
+                if origin is not None:
+                    if origin in SERIALIZABLE_TYPES:
+                        filtered.append(t)
+                elif t in SERIALIZABLE_TYPES:
+                    filtered.append(t)
+            if filtered:
+                argtype = filtered[0]
+            else:
+                import warnings
+
+                warnings.warn(
+                    f"No serializable types found in union for argument '{argname}', defaulting to str"
+                )
+                argtype = str
 
         nargs = None
         # This is needed for compound types like: list[str]
@@ -229,6 +250,7 @@ def _parse_function(func):
         argument["tag"] = f"--{argname.replace('_', '-')}"
         argument["value"] = default
         argument["nargs"] = nargs
+        argument["nullable"] = nullable
         argument["choices"] = argdocs[argname]["choices"]
         if "gui_options" in argdocs[argname]:
             argument["gui_options"] = argdocs[argname]["gui_options"]
@@ -310,7 +332,7 @@ def _add_params_to_parser(parser, params, allow_conf_yaml, unmatched_args):
         "int": int,
         "float": float,
         "str": str,
-        "dict": dict,
+        "dict": str_to_dict,
     }
     for param in params:
         argname = param["name"]
@@ -418,120 +440,19 @@ def str_to_bool(value):
     raise RuntimeError(f"Invalid boolean value {value}")
 
 
-def get_manifest(file, parser, pm_mode=True, cwl=False):
-    import json
-    import os
-
-    if cwl:
-        return get_manifest_cwl(file, parser)
-
-    manifest = OrderedDict()
-    manifestf = os.path.join(os.path.dirname(file), "manifest.json")
-    if os.path.exists(manifestf):
-        with open(manifestf, "r") as f:
-            manifest = json.load(f)
-
-    parserargs = []
-    parseractions = parser._actions
-
-    for action in parseractions:
-        # skip the hidden arguments, the excluded args and the help argument
-        if action.help == "==SUPPRESS==" or action.dest in ("help",):
-            continue
-        actiondict = OrderedDict()
-        actiondict["mandatory"] = action.required
-        actiondict["type"] = action.type.__name__ if action.type is not None else "bool"
-        actiondict["name"] = action.dest
-        actiondict["value"] = action.default
-        actiondict["tag"] = action.option_strings[0]
-        actiondict["description"] = action.help
-        actiondict["nargs"] = action.nargs if action.nargs != 0 else None
-        actiondict["choices"] = action.choices
-        actiondict["metavar"] = action.metavar
-
-        parserargs.append(actiondict)
-
-    if "name" not in manifest:
-        manifest["name"] = parser.prog
-    if "version" not in manifest:
-        manifest["version"] = "1"
-    manifest["description"] = parser.description
-    manifest["params"] = parserargs
-
-    return manifest
-
-
-def get_manifest_cwl(file, parser):
-    import json
-    import yaml
-    import os
-
-    map_argtypes = {
-        "str": "string",
-        "bool": "boolean",
-        "float": "float",
-        "int": "int",
-        "Path": "File",
-    }
-
-    manifest = {"label": parser.prog, "doc": parser.description}
-    manifest.update({"cwlVersion": "v1.2", "class": "CommandLineTool", "inputs": {}})
-
-    manifestf = os.path.join(os.path.dirname(file), "manifest.cwl")
-    if os.path.exists(manifestf):
-        with open(manifestf, "r") as f:
-            manifest.update(yaml.load(f, Loader=yaml.FullLoader))
-    else:
-        manifestf = os.path.join(os.path.dirname(file), "manifest.json")
-        if os.path.exists(manifestf):
-            with open(manifestf, "r") as f:
-                manifest.update(json.load(f))
-
-    parseractions = parser._actions
-    for i, action in enumerate(parseractions):
-        # skip the hidden arguments, the excluded args and the help argument
-        if action.help == "==SUPPRESS==" or action.dest in ("help",):
-            continue
-
-        argtype = action.type.__name__ if action.type is not None else "bool"
-        argtype = map_argtypes[argtype]
-
-        if action.choices is not None:
-            enum_name = f"{action.dest.replace('-', '_')}_enum"
-            if "requirements" not in manifest:
-                manifest["requirements"] = {}
-            if "SchemaDefRequirement" not in manifest["requirements"]:
-                manifest["requirements"]["SchemaDefRequirement"] = {}
-            if "types" not in manifest["requirements"]["SchemaDefRequirement"]:
-                manifest["requirements"]["SchemaDefRequirement"]["types"] = []
-            manifest["requirements"]["SchemaDefRequirement"]["types"].append(
-                {"type": "enum", "name": enum_name, "symbols": action.choices}
-            )
-            argtype = enum_name
-
-        if action.nargs:
-            argtype += "[]"
-        if not action.required:
-            argtype += "?"
-
-        manifest["inputs"][action.dest] = {
-            "type": argtype,
-            "doc": action.help,
-            "inputBinding": {
-                "position": i,
-                "prefix": action.option_strings[0],
-            },
-        }
-        if action.default is not None:
-            manifest["inputs"][action.dest]["default"] = action.default
-
-    return manifest
-
-
-def write_argparser_json(outfile, parser):
+def str_to_dict(value):
+    if isinstance(value, dict):
+        return value
     import json
 
-    manifest = get_manifest(outfile, parser, pm_mode=True)
-
-    with open(outfile, "w") as f:
-        json.dump(manifest, f, indent=4)
+    try:
+        result = json.loads(value)
+    except json.JSONDecodeError:
+        raise argparse.ArgumentTypeError(
+            f"Invalid dict value: {value!r}. Must be a valid JSON object."
+        )
+    if not isinstance(result, dict):
+        raise argparse.ArgumentTypeError(
+            f"Expected a JSON object, got {type(result).__name__}"
+        )
+    return result
